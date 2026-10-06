@@ -1,0 +1,67 @@
+services:
+  simulator:
+    build:
+      context: .
+    image: ocean-snapshot:latest
+    command: ["python", "-m", "simulator.app"]
+    environment:
+      SIMULATOR_PORT: "8080"
+    ports:
+      # Published for local debugging; safe to remap.
+      - "${SIMULATOR_HOST_PORT:-18080}:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2); sys.exit(0 if json.load(r)['status']=='ok' else 1)"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 2s
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: .
+    image: ocean-snapshot:latest
+    command: ["python", "-m", "gateway.app"]
+    environment:
+      GATEWAY_PORT: "8080"
+      UPSTREAM_URL: "http://simulator:8080"
+      SNAPSHOT_STORE: "/data/snapshots"
+      PAGE_TIMEOUT: "3.0"
+    ports:
+      # Host-side port is configurable: GATEWAY_HOST_PORT=9090 docker compose up
+      - "${GATEWAY_HOST_PORT:-8080}:8080"
+    volumes:
+      - snapshot-data:/data
+    depends_on:
+      simulator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2); sys.exit(0 if json.load(r)['status']=='ok' else 1)"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 2s
+    restart: unless-stopped
+
+  # One-shot verifier: runs build check + unit tests + end-to-end smoke and
+  # exits with a bitmask summarizing the results (0 = all passed). Because it
+  # only starts after both health checks pass, its result reflects a working
+  # deployment:
+  #   docker compose up --abort-on-container-exit --exit-code-from verify
+  verify:
+    build:
+      context: .
+    image: ocean-snapshot:latest
+    command: ["python", "-m", "verify.run"]
+    environment:
+      GATEWAY_URL: "http://gateway:8080"
+      SIMULATOR_URL: "http://simulator:8080"
+    depends_on:
+      simulator:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+    restart: ""
+
+volumes:
+  snapshot-data:
